@@ -1,0 +1,99 @@
+<!doctype html>
+<!--
+  チーム名の一括置き換えパネル（Miro Web SDK v2）
+  開いているボードの「〇チーム」「〇-数字」を、指定した組み合わせで置き換える。
+  処理はすべてブラウザ内で完結し、ボードの内容を外部に送信しない。
+-->
+<html lang="ja"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>チーム名の置き換え</title>
+<script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
+<script src="rename.js"></script>
+<style>
+  body { font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; margin: 16px; color: #1a1a1a; font-size: 14px; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  p.note { color: #555; font-size: 12px; margin: 0 0 12px; line-height: 1.5; }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .row input { width: 70px; padding: 6px 8px; border: 1px solid #c7c7cf; border-radius: 6px; font-size: 14px; }
+  .row span { color: #555; }
+  label.scope { display: block; margin: 12px 0; font-size: 13px; }
+  button { width: 100%; padding: 10px; border: 0; border-radius: 6px; font-size: 14px; cursor: pointer; margin-top: 6px; }
+  #preview { background: #eef0ff; color: #2d2fbf; }
+  #run { background: #4262ff; color: #fff; }
+  #run:disabled { background: #b8c2ff; cursor: default; }
+  #msg { margin-top: 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+  .err { color: #c0262d; }
+</style>
+</head><body>
+<h1>チーム名の置き換え</h1>
+<p class="note">「Aチーム」「A-1」のような表記を、右の名前に置き換えます。空欄の行は何もしません。</p>
+<div id="rows"></div>
+<label class="scope"><input type="checkbox" id="onlySel"> 選択中の部品だけを対象にする</label>
+<button id="preview">① 件数を確認する</button>
+<button id="run" disabled>② 置き換える</button>
+<div id="msg"></div>
+<script>
+  var DEFAULTS = [['A', ''], ['B', ''], ['C', '']];
+  var rowsEl = document.getElementById('rows');
+  DEFAULTS.forEach(function (d) {
+    var div = document.createElement('div'); div.className = 'row';
+    div.innerHTML = '<input class="from" value="' + d[0] + '"><span>チーム →</span><input class="to" value="' + d[1] + '" placeholder="例: D"><span>チーム</span>';
+    rowsEl.appendChild(div);
+  });
+  var msg = document.getElementById('msg');
+  var runBtn = document.getElementById('run');
+  var planned = null;
+
+  // 文字を持つ部品と、その文字が入っている項目名
+  var TYPES = ['shape', 'text', 'sticky_note', 'card', 'frame'];
+  function fieldOf(item) { return (item.type === 'frame' || item.type === 'card') ? 'title' : 'content'; }
+
+  function pairs() {
+    return Array.prototype.map.call(document.querySelectorAll('.row'), function (r) {
+      return { from: r.querySelector('.from').value.trim(), to: r.querySelector('.to').value.trim() };
+    });
+  }
+
+  async function targetItems() {
+    if (document.getElementById('onlySel').checked) {
+      var sel = await miro.board.getSelection();
+      return sel.filter(function (it) { return TYPES.indexOf(it.type) >= 0; });
+    }
+    return await miro.board.get({ type: TYPES });
+  }
+
+  document.getElementById('preview').onclick = async function () {
+    runBtn.disabled = true; planned = null;
+    var replacer = TeamRename.buildReplacer(pairs());
+    if (!replacer) { msg.innerHTML = '<span class="err">右側（置き換え後の名前）を1つ以上入れてください。</span>'; return; }
+    msg.textContent = '確認中…';
+    var items = await targetItems();
+    var hits = [], total = 0;
+    items.forEach(function (it) {
+      var f = fieldOf(it); var v = it[f];
+      if (!v) return;
+      var r = replacer(v);
+      if (r.count) { hits.push({ item: it, field: f, text: r.text }); total += r.count; }
+    });
+    planned = hits;
+    msg.textContent = '対象の部品：' + hits.length + '個（置き換え ' + total + 'か所）\n問題なければ「② 置き換える」を押してください。';
+    runBtn.disabled = hits.length === 0;
+  };
+
+  runBtn.onclick = async function () {
+    if (!planned) return;
+    runBtn.disabled = true;
+    var ok = 0, ng = [];
+    for (var i = 0; i < planned.length; i++) {
+      var h = planned[i];
+      try { h.item[h.field] = h.text; await h.item.sync(); ok++; }
+      catch (e) { ng.push(h.item.id + '（' + (e && e.message ? e.message : e) + '）'); }
+      if (i % 10 === 0) msg.textContent = '置き換え中… ' + (i + 1) + ' / ' + planned.length;
+    }
+    planned = null;
+    msg.innerHTML = '完了：' + ok + '個の部品を置き換えました。' +
+      (ng.length ? '<br><span class="err">置き換えできなかった部品 ' + ng.length + '個（ロック中の可能性があります）：<br>' + ng.join('<br>') + '</span>' : '');
+  };
+</script>
+</body></html>
